@@ -30,93 +30,39 @@ async def click_recaptcha_checkbox(page: Page) -> bool:
     Возвращает True если клик выполнен успешно.
     """
     try:
-        # Найти ChatModal iframe
-        frames = page.frames
-        for frame in frames:
-            try:
-                # Проверить есть ли капча в этом фрейме
-                captcha_locator = frame.locator(".x61f99309--_919db--captcha > div")
-                if await captcha_locator.count() > 0:
-                    # Найти recaptcha iframe внутри этого фрейма
-                    recaptcha_iframe = await frame.query_selector('iframe[src*="recaptcha"]')
-                    if recaptcha_iframe:
-                        print("[CAPTCHA_CLICK] Найден recaptcha iframe, кликаю на checkbox...", flush=True)
-                        try:
-                            # Получить content frame рекапчи
-                            recaptcha_frame = await recaptcha_iframe.content_frame()
-                            if recaptcha_frame:
-                                # Кликнуть на checkbox - используем более точный селектор
-                                # Пробуем разные варианты
-                                checkbox_selectors = [
-                                    '#recaptcha-anchor',  # Самый точный
-                                    '.recaptcha-checkbox[role="checkbox"]',
-                                    '.recaptcha-checkbox',
-                                    '.recaptcha-checkbox-border'
-                                ]
-                                
-                                for selector in checkbox_selectors:
-                                    try:
-                                        checkbox = recaptcha_frame.locator(selector).first
-                                        if await checkbox.count() > 0:
-                                            await checkbox.click(timeout=3000)
-                                            print(f"[CAPTCHA_CLICK] ✓ Checkbox кликнут через селектор '{selector}'!", flush=True)
-                                            await page.wait_for_timeout(2000)  # Ждем реакции
-                                            return True
-                                    except Exception as e:
-                                        continue
-                        except Exception as e:
-                            print(f"[CAPTCHA_CLICK] Ошибка клика на checkbox: {e}", flush=True)
-                    
-                    # Альтернатива: попробовать кликнуть через JavaScript
-                    try:
-                        clicked = await frame.evaluate(
-                            """
-                            () => {
-                                // Найти checkbox через различные селекторы (приоритет точным)
-                                const selectors = [
-                                    '#recaptcha-anchor',  // Самый точный
-                                    '.recaptcha-checkbox[role="checkbox"]',
-                                    '.recaptcha-checkbox',
-                                    '[role="checkbox"]'
-                                ];
-                                
-                                for (const sel of selectors) {
-                                    const el = document.querySelector(sel);
-                                    if (el) {
-                                        el.click();
-                                        console.log('[CAPTCHA_CLICK] Clicked via selector:', sel);
-                                        return true;
-                                    }
-                                }
-                                
-                                // Попробовать найти в iframe
-                                const iframes = document.querySelectorAll('iframe[src*="recaptcha"]');
-                                for (const iframe of iframes) {
-                                    try {
-                                        const iframeDoc = iframe.contentDocument || iframe.contentWindow.document;
-                                        const checkbox = iframeDoc.querySelector('.recaptcha-checkbox-border, .recaptcha-checkbox');
-                                        if (checkbox) {
-                                            checkbox.click();
-                                            return true;
-                                        }
-                                    } catch(e) {
-                                        // CORS error, skip
-                                    }
-                                }
-                                
-                                return false;
-                            }
-                            """
+        checkbox_selectors = [
+            "#recaptcha-anchor",
+            ".recaptcha-checkbox-border",
+            ".recaptcha-checkbox[role=\"checkbox\"]",
+            ".recaptcha-checkbox",
+        ]
+
+        contexts = []
+        try:
+            if await page.locator('[data-testid="ChatModal"]').count() > 0:
+                contexts.append(page.frame_locator('[data-testid="ChatModal"]'))
+        except Exception:
+            pass
+        contexts.append(page)
+
+        for ctx in contexts:
+            recaptcha_frame = ctx.frame_locator('iframe[src*="recaptcha"]')
+            for selector in checkbox_selectors:
+                try:
+                    checkbox = recaptcha_frame.locator(selector).first
+                    if await checkbox.count() > 0:
+                        print(
+                            f"[CAPTCHA_CLICK] Найден checkbox через '{selector}', кликаю...",
+                            flush=True,
                         )
-                        if clicked:
-                            print("[CAPTCHA_CLICK] ✓ Checkbox кликнут через JavaScript!", flush=True)
-                            await page.wait_for_timeout(2000)
-                            return True
-                    except Exception as e:
-                        print(f"[CAPTCHA_CLICK] Ошибка JavaScript клика: {e}", flush=True)
-            except Exception:
-                pass
-        
+                        await checkbox.scroll_into_view_if_needed()
+                        await checkbox.click(timeout=3000)
+                        print(f"[CAPTCHA_CLICK] ✓ Checkbox кликнут через '{selector}'!", flush=True)
+                        await page.wait_for_timeout(2000)
+                        return True
+                except Exception as e:
+                    continue
+
         print("[CAPTCHA_CLICK] ✗ Не удалось кликнуть на checkbox", flush=True)
         return False
     except Exception as e:
@@ -240,4 +186,3 @@ async def solve_captcha_with_click_and_visual_check(page: Page, timeout_s: int =
     else:
         print("[CAPTCHA_SOLVE] ⚠ Капча все еще видна", flush=True)
         return False
-

@@ -10,6 +10,7 @@ from playwright.async_api import FrameLocator, async_playwright, Locator, Page
 from cian_bot.config import load_settings
 from cian_bot.captcha import wait_for_recaptcha_to_be_solved, is_recaptcha_visible, is_visual_captcha_challenge_visible
 from cian_bot.captcha_click_solve import solve_captcha_with_click_and_visual_check
+from cian_bot.captcha_solver import find_recaptcha_response_context
 from cian_bot.google_drive import download_public_file
 from cian_bot.pw_utils import click_first_visible, find_dialog_id_from_url, safe_screenshot
 from cian_bot.state_store import StateStore
@@ -99,39 +100,25 @@ async def _wait_after_send(
             
             # Verify captcha is gone OR token is set
             captcha_still_visible = await is_recaptcha_visible(page)
-            token_set = False
-            try:
-                # Check if token is actually set in ChatModal iframe
-                frames = page.frames
-                for frame in frames:
-                    try:
-                        captcha_locator = frame.locator(".x61f99309--_919db--captcha > div")
-                        if await captcha_locator.count() > 0:
-                            token_check = await frame.evaluate(
-                                """
-                                () => {
-                                    if (window.grecaptcha && window.grecaptcha.getResponse) {
-                                        const response = window.grecaptcha.getResponse();
-                                        return response && response.length > 100;
-                                    }
-                                    return false;
-                                }
-                                """
-                            )
-                            if token_check:
-                                token_set = True
-                                break
-                    except Exception:
-                        pass
-            except Exception:
-                pass
+            response_context = await find_recaptcha_response_context(page)
+            token_set = bool(response_context and response_context.get("details", {}).get("filled"))
             
             if captcha_still_visible and not token_set:
                 print("[SEND] ВНИМАНИЕ: Капча все еще видна после решения! Возможно требуется ручное вмешательство.", flush=True)
-            elif token_set:
-                print("[SEND] Токен установлен, форма готова к отправке (капча может быть видна визуально).", flush=True)
+                await page.wait_for_timeout(1000)
+                continue
+            if token_set:
+                context_info = response_context.get("context") if response_context else "unknown"
+                context_url = response_context.get("url") if response_context else "unknown"
+                print(
+                    "[SEND] Токен установлен, форма готова к отправке "
+                    f"(context={context_info}, url={context_url}).",
+                    flush=True,
+                )
             else:
-                print("[SEND] Капча исчезла, форма готова к отправке.", flush=True)
+                print("[SEND] Капча исчезла, но токен не подтвержден; жду подтверждения перед отправкой.", flush=True)
+                await page.wait_for_timeout(1000)
+                continue
             
             # Try to resend multiple times if needed
             for retry_attempt in range(3):
@@ -1084,5 +1071,4 @@ async def main() -> None:
 
 if __name__ == "__main__":
     asyncio.run(main())
-
 
