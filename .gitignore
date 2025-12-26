@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.playwright/
+auth_state.json
+downloads/
+screenshots/
+.env
+state.db
+*.db
+.env.local
+

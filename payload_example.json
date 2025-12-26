@@ -1,0 +1,20 @@
+{
+  "jsonQuery": {
+    "_type": "flatsale",
+    "engine_version": {
+      "type": "term",
+      "value": 2
+    },
+    "region": {
+      "type": "terms",
+      "value": [
+        4897
+      ]
+    },
+    "building_status": {
+      "type": "term",
+      "value": 1
+    }
+  }
+}
+

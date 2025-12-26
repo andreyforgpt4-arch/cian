@@ -1,0 +1,22 @@
+{
+  "name": "cian-playwright-bot",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Playwright automation: send message on Cian listing (authorized), then attach image in dialogs.",
+  "scripts": {
+    "auth": "node --no-warnings=ExperimentalWarning --loader ts-node/register src/auth.ts",
+    "run": "node --no-warnings=ExperimentalWarning --loader ts-node/register src/run.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "playwright": "^1.50.1",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.7.2"
+  }
+}
+
+
