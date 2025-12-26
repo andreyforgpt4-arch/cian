@@ -340,6 +340,60 @@ async def extract_recaptcha_site_key(page) -> Optional[str]:
     return None
 
 
+async def _recaptcha_response_details(context, token_value: Optional[str] = None) -> dict:
+    return await context.evaluate(
+        """
+        (token) => {
+            const textarea = document.querySelector('textarea[name="g-recaptcha-response"]');
+            const input = document.querySelector('input[name="g-recaptcha-response"]');
+            const textareaValue = textarea ? textarea.value : '';
+            const inputValue = input ? input.value : '';
+            const filled = Boolean(textareaValue || inputValue);
+            let grecaptchaResponse = null;
+            let grecaptchaAvailable = false;
+            try {
+                grecaptchaAvailable = Boolean(window.grecaptcha && window.grecaptcha.getResponse);
+                if (grecaptchaAvailable) {
+                    grecaptchaResponse = window.grecaptcha.getResponse();
+                }
+            } catch (e) {
+                grecaptchaResponse = null;
+            }
+            const tokenMatch = token
+                ? (textareaValue === token || inputValue === token)
+                : filled;
+            const grecaptchaMatch = token && grecaptchaAvailable
+                ? grecaptchaResponse === token
+                : null;
+            return {
+                has_textarea: Boolean(textarea),
+                has_input: Boolean(input),
+                textarea_value_length: textareaValue.length,
+                input_value_length: inputValue.length,
+                filled,
+                token_match: tokenMatch,
+                grecaptcha_available: grecaptchaAvailable,
+                grecaptcha_response_length: grecaptchaResponse ? grecaptchaResponse.length : 0,
+                grecaptcha_match: grecaptchaMatch,
+            };
+        }
+        """,
+        token_value,
+    )
+
+
+async def _log_recaptcha_search_result(context_name: str, details: dict, context_url: str | None) -> None:
+    if details.get("has_textarea") or details.get("has_input"):
+        print(
+            "[CAPTCHA_SOLVER] g-recaptcha-response найден в "
+            f"{context_name} (url={context_url}): "
+            f"textarea={details.get('has_textarea')}, "
+            f"input={details.get('has_input')}, "
+            f"filled={details.get('filled')}",
+            flush=True,
+        )
+
+
 async def inject_recaptcha_token(page, token: str) -> bool:
     """
     Inject solved reCAPTCHA token into page.
@@ -350,6 +404,7 @@ async def inject_recaptcha_token(page, token: str) -> bool:
     # Helper function to inject token in a context
     async def inject_in_context(context, context_name: str) -> bool:
         try:
+            context_url = getattr(context, "url", None)
             success = await context.evaluate(
                 """
                 (token) => {
@@ -495,7 +550,28 @@ async def inject_recaptcha_token(page, token: str) -> bool:
                         console.log('[CAPTCHA_INJECT] Checkbox click error:', e);
                     }
                     
+                    const textareaValue = textarea ? textarea.value : '';
+                    const inputValue = input ? input.value : '';
+                    const filled = Boolean(textareaValue || inputValue);
+                    let grecaptchaResponse = null;
+                    let grecaptchaAvailable = false;
+                    try {
+                        grecaptchaAvailable = Boolean(window.grecaptcha && window.grecaptcha.getResponse);
+                        if (grecaptchaAvailable) {
+                            grecaptchaResponse = window.grecaptcha.getResponse();
+                        }
+                    } catch (e) {
+                        grecaptchaResponse = null;
+                    }
+
                     details.found = found;
+                    details.has_textarea = Boolean(textarea);
+                    details.has_input = Boolean(input);
+                    details.filled = filled;
+                    details.token_match = textareaValue === token || inputValue === token;
+                    details.grecaptcha_available = grecaptchaAvailable;
+                    details.grecaptcha_response_length = grecaptchaResponse ? grecaptchaResponse.length : 0;
+                    details.grecaptcha_match = grecaptchaAvailable ? grecaptchaResponse === token : null;
                     console.log('[CAPTCHA_INJECT] Injection result:', details);
                     return details;
                 }
@@ -514,7 +590,20 @@ async def inject_recaptcha_token(page, token: str) -> bool:
                     print(f"[CAPTCHA_SOLVER]   - input value length: {success.get('input_value_length', 0)}", flush=True)
                 if 'grecaptcha_response_length' in success:
                     print(f"[CAPTCHA_SOLVER]   - grecaptcha response length: {success.get('grecaptcha_response_length', 0)}", flush=True)
-                return found
+                await _log_recaptcha_search_result(context_name, success, context_url)
+                if not success.get("token_match"):
+                    print(
+                        f"[CAPTCHA_SOLVER] ✗ g-recaptcha-response не заполнен в {context_name} (url={context_url})",
+                        flush=True,
+                    )
+                    return False
+                if success.get("grecaptcha_match") is False:
+                    print(
+                        f"[CAPTCHA_SOLVER] ✗ grecaptcha.getResponse не подтверждает токен в {context_name} (url={context_url})",
+                        flush=True,
+                    )
+                    return False
+                return True
             else:
                 # Backward compat - if evaluate returns bool
                 return bool(success)
@@ -672,3 +761,36 @@ async def inject_recaptcha_token(page, token: str) -> bool:
     print("[CAPTCHA_SOLVER] Token injection failed in all contexts", flush=True)
     return False
 
+
+async def find_recaptcha_response_context(page, token: Optional[str] = None) -> Optional[dict]:
+    """
+    Search for g-recaptcha-response textarea/input on main page and then in each frame.
+    Logs where it was found (frame name/URL).
+    Returns details for the first filled/matching context (main page has priority).
+    """
+    print(
+        "[CAPTCHA_SOLVER] Поиск g-recaptcha-response: главная страница -> фреймы...",
+        flush=True,
+    )
+
+    try:
+        details = await _recaptcha_response_details(page, token)
+        await _log_recaptcha_search_result("main page", details, page.url)
+        if details.get("filled") and details.get("token_match"):
+            return {"context": "main page", "url": page.url, "details": details}
+    except Exception as e:
+        print(f"[CAPTCHA_SOLVER] Ошибка поиска g-recaptcha-response на странице: {e}", flush=True)
+
+    for index, frame in enumerate(page.frames):
+        frame_name = frame.name or f"frame-{index}"
+        frame_url = frame.url
+        try:
+            details = await _recaptcha_response_details(frame, token)
+            await _log_recaptcha_search_result(f"frame {frame_name}", details, frame_url)
+            if details.get("filled") and details.get("token_match"):
+                return {"context": frame_name, "url": frame_url, "details": details}
+        except Exception:
+            continue
+
+    print("[CAPTCHA_SOLVER] g-recaptcha-response не найден или не заполнен", flush=True)
+    return None
