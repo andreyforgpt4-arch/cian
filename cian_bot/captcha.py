@@ -29,20 +29,40 @@ async def is_recaptcha_visible(page: Page) -> bool:
         "div.g-recaptcha",
         "[data-sitekey]",
     )
+    text_indicator = re.compile(r"я не робот", re.I)
 
-    # Cian-specific: captcha inside ChatModal iframe (user-provided locator).
+    for sel in selectors:
+        try:
+            if await page.locator(sel).first.is_visible():
+                return True
+        except Exception:
+            pass
+
     try:
-        cian_captcha = page.frame_locator('[data-testid="ChatModal"]').locator(
-            ".x61f99309--_919db--captcha > div"
-        )
-        if await cian_captcha.first.is_visible():
+        if await page.get_by_text(text_indicator).first.is_visible():
             return True
     except Exception:
         pass
 
-    # Important: reCAPTCHA may appear inside an iframe (e.g., Cian ChatModal).
-    frames = page.frames
-    for frame in frames:
+    # Cian-specific: captcha inside ChatModal iframe (use stable indicators).
+    try:
+        chat_modal = page.frame_locator('[data-testid="ChatModal"]')
+        for sel in selectors:
+            try:
+                if await chat_modal.locator(sel).first.is_visible():
+                    return True
+            except Exception:
+                pass
+
+        try:
+            if await chat_modal.get_by_text(text_indicator).first.is_visible():
+                return True
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+    async def has_captcha_in_frame(frame) -> bool:
         for sel in selectors:
             try:
                 if await frame.locator(sel).first.is_visible():
@@ -50,12 +70,25 @@ async def is_recaptcha_visible(page: Page) -> bool:
             except Exception:
                 pass
 
-        # Sometimes the page shows "Я не робот" text
         try:
-            if await frame.get_by_text(re.compile(r"я не робот", re.I)).first.is_visible():
+            if await frame.get_by_text(text_indicator).first.is_visible():
                 return True
         except Exception:
             pass
+
+        for child in frame.child_frames:
+            if await has_captcha_in_frame(child):
+                return True
+        return False
+
+    # Important: reCAPTCHA may appear inside nested iframes.
+    try:
+        if await has_captcha_in_frame(page.main_frame):
+            return True
+    except Exception:
+        pass
+
+    return False
 
 
 async def is_visual_captcha_challenge_visible(page: Page) -> bool:
@@ -95,8 +128,6 @@ async def is_visual_captcha_challenge_visible(page: Page) -> bool:
         except Exception:
             pass
     
-    return False
-
     return False
 
 
@@ -439,5 +470,4 @@ async def wait_for_recaptcha_to_be_solved(
         waited += poll_ms / 1000
 
     raise TimeoutError(f"reCAPTCHA не решена за {timeout_s} секунд")
-
 
