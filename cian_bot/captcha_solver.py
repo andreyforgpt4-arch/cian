@@ -5,13 +5,15 @@ import os
 import time
 from typing import Optional
 
-import requests
+import aiohttp
 
 
 class CaptchaSolver:
     """
     Automatic reCAPTCHA solving via external service (2captcha or CapSolver).
     """
+
+    request_timeout_s = 30
 
     def __init__(self, service: str = "2captcha", api_key: Optional[str] = None):
         """
@@ -71,9 +73,9 @@ class CaptchaSolver:
         }
         try:
             print(f"[CAPTCHA_SOLVER] Sending request to 2captcha with API key: {self.api_key[:10]}...", flush=True)
-            resp = requests.post(self.submit_url, data=submit_data, timeout=30)
-            resp.raise_for_status()
-            result = resp.json()
+            result = await self._request_json("POST", self.submit_url, data=submit_data)
+            if not result:
+                return None
             if result.get("status") != 1:
                 print(f"[CAPTCHA_SOLVER] 2captcha submit failed: {result}", flush=True)
                 # Check if it's an API key error
@@ -93,13 +95,13 @@ class CaptchaSolver:
         while time.time() < deadline:
             await asyncio.sleep(5)  # Wait 5 seconds between checks
             try:
-                result_resp = requests.get(
+                result = await self._request_json(
+                    "GET",
                     self.result_url,
                     params={"key": self.api_key, "action": "get", "id": task_id, "json": 1},
-                    timeout=30,
                 )
-                result_resp.raise_for_status()
-                result = result_resp.json()
+                if not result:
+                    continue
                 if result.get("status") == 1:
                     token = result.get("request")
                     print(f"[CAPTCHA_SOLVER] Solution received!", flush=True)
@@ -130,9 +132,9 @@ class CaptchaSolver:
             },
         }
         try:
-            resp = requests.post(self.submit_url, json=submit_data, timeout=30)
-            resp.raise_for_status()
-            result = resp.json()
+            result = await self._request_json("POST", self.submit_url, json=submit_data)
+            if not result:
+                return None
             if result.get("errorId") != 0:
                 print(f"[CAPTCHA_SOLVER] CapSolver submit failed: {result}", flush=True)
                 return None
@@ -149,9 +151,9 @@ class CaptchaSolver:
             await asyncio.sleep(2)  # CapSolver is usually faster
             try:
                 result_data = {"clientKey": self.api_key, "taskId": task_id}
-                result_resp = requests.post(self.result_url, json=result_data, timeout=30)
-                result_resp.raise_for_status()
-                result = result_resp.json()
+                result = await self._request_json("POST", self.result_url, json=result_data)
+                if not result:
+                    continue
                 if result.get("status") == "ready":
                     token = result.get("solution", {}).get("gRecaptchaResponse")
                     if token:
@@ -167,6 +169,29 @@ class CaptchaSolver:
                 continue
 
         print(f"[CAPTCHA_SOLVER] Timeout waiting for solution", flush=True)
+        return None
+
+    async def _request_json(self, method: str, url: str, **kwargs) -> Optional[dict]:
+        timeout = aiohttp.ClientTimeout(total=self.request_timeout_s)
+        try:
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.request(method, url, **kwargs) as response:
+                    response.raise_for_status()
+                    return await response.json(content_type=None)
+        except asyncio.TimeoutError:
+            print(
+                f"[CAPTCHA_SOLVER] Request timeout after {self.request_timeout_s}s for {method} {url}",
+                flush=True,
+            )
+        except aiohttp.ClientResponseError as e:
+            print(
+                f"[CAPTCHA_SOLVER] Request failed ({e.status}) for {method} {url}: {e.message}",
+                flush=True,
+            )
+        except aiohttp.ClientError as e:
+            print(f"[CAPTCHA_SOLVER] Request error for {method} {url}: {e}", flush=True)
+        except Exception as e:
+            print(f"[CAPTCHA_SOLVER] Unexpected request error for {method} {url}: {e}", flush=True)
         return None
 
 
